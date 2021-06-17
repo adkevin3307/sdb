@@ -1,12 +1,12 @@
 #include "ptools.h"
 
+#include <iostream>
 #include <map>
 #include <string>
 #include <fstream>
 #include <sstream>
 #include <vector>
-
-#include <stdio.h>
+#include <iomanip>
 #include <libgen.h>
 
 using namespace std;
@@ -47,21 +47,37 @@ int load_maps(pid_t pid, map<range_t, map_entry_t>& loaded)
             m.range.end = strtol(args[0].substr(it + 1).c_str(), NULL, 16);
         }
 
+        m.permission = 0;
+
+        if (args[1][0] == 'r') m.permission |= 0x04;
+        if (args[1][0] == 'w') m.permission |= 0x02;
+        if (args[1][0] == 'x') m.permission |= 0x01;
+
+        m.node = args[4];
+
         m.name = basename((char*)args[5].c_str());
-        m.perm = 0;
-
-        if (args[1][0] == 'r') m.perm |= 0x04;
-        if (args[1][0] == 'w') m.perm |= 0x02;
-        if (args[1][0] == 'x') m.perm |= 0x01;
-
-        m.offset = strtol(args[2].c_str(), NULL, 16);
-
         loaded[m.range] = m;
-
-        printf("XXX: %lx-%lx %04o %s\n", m.range.begin, m.range.end, m.perm, m.name.c_str());
     }
 
     file.close();
 
     return loaded.size();
+}
+
+ostream& operator<<(ostream& os, const map_entry_t& rhs)
+{
+    os << hex << setw(16) << setfill('0') << rhs.range.begin << '-';
+    os << hex << setw(16) << setfill('0') << rhs.range.end << ' ';
+
+    os << ((rhs.permission & 0x04) ? 'r' : '-');
+    os << ((rhs.permission & 0x02) ? 'w' : '-');
+    os << ((rhs.permission & 0x01) ? 'x' : '-');
+
+    os << ' ';
+
+    os << setw(9) << setfill(' ') << left << rhs.node << ' ';
+
+    os << rhs.name;
+
+    return os;
 }
