@@ -1,1 +1,4 @@
 test/
+obj/
+compile_commands.json
+hw4
