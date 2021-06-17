@@ -1,5 +1,6 @@
 EXE = hw4
 OBJ_DIR = obj
+TRASH = .cache
 
 SOURCES = $(wildcard src/*.cpp)
 OBJS = $(addprefix $(OBJ_DIR)/, $(patsubst %.cpp, %.o, $(notdir $(SOURCES))))
@@ -21,4 +22,4 @@ $(EXE): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBS)
 
 clean:
-	rm -rf $(EXE) $(OBJ_DIR)
+	rm -rf $(EXE) $(OBJ_DIR) $(TRASH)
