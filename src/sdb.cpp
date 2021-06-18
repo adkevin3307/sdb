@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
+#include <elf.h>
 
 #include "types.h"
 #include "ptools.h"
@@ -14,6 +15,7 @@ using namespace std;
 
 static STATUS current_status = STATUS::NONE;
 static vector<command_t> available_commands;
+static pid_t child = -1;
 
 void dump_code(long addr, long code)
 {
@@ -56,8 +58,6 @@ map<string, string> parse(int argc, char* argv[])
                 args["program_arguments"] += " ";
             }
         }
-
-        current_status = STATUS::LOADED;
     }
 
     return args;
@@ -147,9 +147,22 @@ void help_message()
     cout << "- start: start the program and stop at the first instruction" << '\n';
 }
 
-pid_t load_program(map<string, string>& args)
+void load_program(map<string, string>& args)
 {
-    pid_t child;
+    if (args.find("program") == args.end()) return;
+
+    FILE* file = fopen(args["program"].c_str(), "rb");
+
+    if (!file) {
+        cerr << "[load] error, program not found" << '\n';
+
+        return;
+    }
+
+    Elf64_Ehdr header;
+    fread(&header, 1, sizeof(header), file);
+
+    fclose(file);
 
     if ((child = fork()) < 0) {
         cerr << "[fork] error" << '\n';
@@ -179,25 +192,32 @@ pid_t load_program(map<string, string>& args)
     }
     else {
         ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_EXITKILL | PTRACE_O_TRACEEXEC);
-    }
 
-    return child;
+        current_status = STATUS::LOADED;
+        cout << "** program '" << args["program"] << "' loaded. entry point 0x" << hex << header.e_entry << '\n';
+
+        signal(SIGCHLD, [](int signo) {
+            int status;
+            if (waitpid(child, &status, WNOHANG) != child) return;
+
+            if (WIFEXITED(status)) {
+                current_status = STATUS::NONE;
+
+                int retval = WEXITSTATUS(status);
+                cout << "** child process " << child << " terminiated " << (retval == 0 ? "normally" : "abnormally") << " (code " << retval << ")" << '\n';
+            }
+        });
+    }
 }
 
 int main(int argc, char* argv[])
 {
-    // TODO load message
-    // TODO back to load
-
     init_command();
     map<string, string> args = parse(argc, argv);
 
-    pid_t child = 0;
-    map<unsigned long, unsigned long> breakpoints;
+    load_program(args);
 
-    if (current_status == STATUS::LOADED) {
-        child = load_program(args);
-    }
+    map<unsigned long, unsigned long> breakpoints;
 
     while (true) {
         vector<string> command = shell("> ");
@@ -222,12 +242,10 @@ int main(int argc, char* argv[])
 
                 break;
             case COMMAND_TYPE::LOAD:
-                current_status = STATUS::LOADED;
-
-                args["program"] = command[0];
+                args["program"] = command[1];
 
                 args["program_arguments"] = "";
-                for (size_t i = 0; i < command.size(); i++) {
+                for (size_t i = 1; i < command.size(); i++) {
                     args["program_arguments"] += command[i];
 
                     if (i != command.size() - 1) {
@@ -235,7 +253,7 @@ int main(int argc, char* argv[])
                     }
                 }
 
-                child = load_program(args);
+                load_program(args);
 
                 break;
             case COMMAND_TYPE::RUN:
@@ -301,7 +319,7 @@ int main(int argc, char* argv[])
                         break;
                 }
 
-                cerr << command[0] << " not allow" << '\n';
+                cerr << "'" << command[0] << "' not allow" << '\n';
 
                 break;
             default:
