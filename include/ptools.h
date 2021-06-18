@@ -3,10 +3,15 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "types.h"
 
-bool operator<(range_t r1, range_t r2);
+std::map<std::string, std::string> parse(int argc, char* argv[]);
+std::vector<std::string> prompt(std::string message);
+void help_message();
+void dump_code(long addr, long code);
 int load_maps(pid_t pid, std::map<range_t, map_entry_t>& loaded);
 
+bool operator<(range_t r1, range_t r2);
 std::ostream& operator<<(std::ostream& os, const map_entry_t& rhs);

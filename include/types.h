@@ -37,10 +37,3 @@ typedef struct {
     std::string node;
     std::string name;
 } map_entry_t;
-
-typedef struct {
-    std::string command;
-    std::string short_command;
-    int active_status;
-    COMMAND_TYPE command_type;
-} command_t;
