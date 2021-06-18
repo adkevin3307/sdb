@@ -7,15 +7,13 @@
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 
-// #include <assert.h>
-// #include <stdio.h>
-// #include <stdlib.h>
-// #include <sys/types.h>
-// #include <sys/user.h>
-
+#include "types.h"
 #include "ptools.h"
 
 using namespace std;
+
+static STATUS current_status = STATUS::NONE;
+static vector<command_t> available_commands;
 
 void dump_code(long addr, long code)
 {
@@ -47,30 +45,110 @@ map<string, string> parse(int argc, char* argv[])
         }
     }
 
-    if (optind >= argc) {
-        cerr << "[arg] error, no program given" << '\n';
+    if (optind < argc) {
+        args["program"] = argv[optind];
+        args["program_arguments"] = "";
 
-        exit(EXIT_FAILURE);
-    }
+        for (auto i = optind; i < argc; i++) {
+            args["program_arguments"] += argv[i];
 
-    args["program"] = argv[optind];
-    args["program_arguments"] = "";
-
-    for (auto i = optind; i < argc; i++) {
-        args["program_arguments"] += argv[i];
-
-        if (i != argc - 1) {
-            args["program_arguments"] += " ";
+            if (i != argc - 1) {
+                args["program_arguments"] += " ";
+            }
         }
+
+        current_status = STATUS::LOADED;
     }
 
     return args;
 }
 
-int main(int argc, char* argv[])
+void add_command(string command, string short_command, int active_status, COMMAND_TYPE command_type)
 {
-    map<string, string> args = parse(argc, argv);
+    command_t element;
 
+    element.command = command;
+    element.short_command = short_command;
+    element.active_status = active_status;
+    element.command_type = command_type;
+
+    available_commands.push_back(element);
+}
+
+void init_command()
+{
+    add_command("break", "b", (1 << STATUS::RUNNING), COMMAND_TYPE::BREAK);
+    add_command("cont", "c", (1 << STATUS::RUNNING), COMMAND_TYPE::CONT);
+    add_command("delete", "", (1 << STATUS::RUNNING), COMMAND_TYPE::DELETE);
+    add_command("disasm", "d", (1 << STATUS::RUNNING), COMMAND_TYPE::DISASM);
+    add_command("dump", "x", (1 << STATUS::RUNNING), COMMAND_TYPE::DUMP);
+    add_command("exit", "q", (1 << STATUS::NONE) | (1 << STATUS::LOADED) | (1 << STATUS::RUNNING), COMMAND_TYPE::EXIT);
+    add_command("get", "g", (1 << STATUS::RUNNING), COMMAND_TYPE::GET);
+    add_command("getregs", "", (1 << STATUS::RUNNING), COMMAND_TYPE::GETREGS);
+    add_command("help", "h", (1 << STATUS::NONE) | (1 << STATUS::LOADED) | (1 << STATUS::RUNNING), COMMAND_TYPE::HELP);
+    add_command("list", "l", (1 << STATUS::NONE) | (1 << STATUS::LOADED) | (1 << STATUS::RUNNING), COMMAND_TYPE::LIST);
+    add_command("load", "", (1 << STATUS::NONE), COMMAND_TYPE::LOAD);
+    add_command("run", "r", (1 << STATUS::LOADED) | (1 << STATUS::RUNNING), COMMAND_TYPE::RUN);
+    add_command("vmmap", "m", (1 << STATUS::RUNNING), COMMAND_TYPE::VMMAP);
+    add_command("set", "s", (1 << STATUS::RUNNING), COMMAND_TYPE::SET);
+    add_command("si", "", (1 << STATUS::RUNNING), COMMAND_TYPE::SI);
+    add_command("start", "", (1 << STATUS::LOADED), COMMAND_TYPE::START);
+}
+
+int check_command(vector<string> target_command)
+{
+    for (auto command : available_commands) {
+        if (command.command == target_command[0] || command.short_command == target_command[0]) {
+            if (command.active_status & (1 << current_status)) {
+                return command.command_type;
+            }
+        }
+    }
+
+    return -1;
+}
+
+vector<string> shell(string prompt)
+{
+    string buffer;
+    vector<string> command;
+
+    cout << prompt;
+    getline(cin, buffer);
+
+    stringstream ss;
+    ss << buffer;
+
+    string token;
+    while (ss >> token) {
+        command.push_back(token);
+    }
+
+    return command;
+}
+
+void help_message()
+{
+    cout << "- break {instruction-address}: add a break point" << '\n';
+    cout << "- cont: continue execution" << '\n';
+    cout << "- delete {break-point-id}: remove a break point" << '\n';
+    cout << "- disasm addr: disassemble instructions in a file or a memory region" << '\n';
+    cout << "- dump addr [length]: dump memory content" << '\n';
+    cout << "- exit: terminate the debugger" << '\n';
+    cout << "- get reg: get a single value from a register" << '\n';
+    cout << "- getregs: show registers" << '\n';
+    cout << "- help: show this message" << '\n';
+    cout << "- list: list break points" << '\n';
+    cout << "- load {path/to/a/program}: load a program" << '\n';
+    cout << "- run: run the program" << '\n';
+    cout << "- vmmap: show memory layout" << '\n';
+    cout << "- set reg val: get a single value to a register" << '\n';
+    cout << "- si: step into instruction" << '\n';
+    cout << "- start: start the program and stop at the first instruction" << '\n';
+}
+
+pid_t load_program(map<string, string>& args)
+{
     pid_t child;
 
     if ((child = fork()) < 0) {
@@ -78,8 +156,7 @@ int main(int argc, char* argv[])
 
         exit(EXIT_FAILURE);
     }
-
-    if (child == 0) {
+    else if (child == 0) {
         if (ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) {
             cerr << "[ptrace] error, traceme" << '\n';
 
@@ -97,72 +174,140 @@ int main(int argc, char* argv[])
         arguments.push_back(NULL);
 
         execvp(args["program"].c_str(), arguments.data());
+
+        exit(EXIT_SUCCESS);
     }
     else {
-        map<range_t, map_entry_t> vmmap;
-
-        load_maps(child, vmmap);
-        for (auto element : vmmap) {
-            cout << element.second << '\n';
-        }
-
-        while (true) {
-            int status;
-
-            pid_t wpid = waitpid(child, &status, WNOHANG);
-            if (wpid == child) break;
-        }
+        ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_EXITKILL | PTRACE_O_TRACEEXEC);
     }
 
-    // unsigned long baseaddr, target, code;
-    // map<range_t, map_entry_t> vmmap;
-    // map<range_t, map_entry_t>::iterator vi;
+    return child;
+}
 
-    // if (waitpid(child, &status, 0) < 0) errquit("waitpid");
-    // assert(WIFSTOPPED(status));
-    // ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_EXITKILL);
+int main(int argc, char* argv[])
+{
+    // TODO load message
+    // TODO back to load
 
-    // if (load_maps(child, vmmap) <= 0) {
-    // fprintf(stderr, "## cannot load memory mappings.\n");
-    // return -1;
-    // }
-    // fprintf(stderr, "## %zu map entries loaded.\n", vmmap.size());
+    init_command();
+    map<string, string> args = parse(argc, argv);
 
-    // for (vi = vmmap.begin(); vi != vmmap.end(); vi++) {
-    // if (vi->second.name == "guess" && vi->second.offset == 0 && (vi->second.perm & 0x01) == 0x01) {
-    // baseaddr = vi->second.range.begin;
-    // break;
-    // }
-    // }
-    // target = baseaddr + offset;
-    // fprintf(stderr, "## baseaddr = 0x%zx, target = 0x%zx.\n", baseaddr, target);
+    pid_t child = 0;
+    map<unsigned long, unsigned long> breakpoints;
 
-    // [> get original text: 48 39 d0 <]
-    // code = ptrace(PTRACE_PEEKTEXT, child, target, 0);
-    // dump_code(target, code);
-    // [> set break point <]
-    // if (ptrace(PTRACE_POKETEXT, child, target, (code & 0xffffffffffffff00) | 0xcc) != 0)
-    // errquit("ptrace(POKETEXT)");
+    if (current_status == STATUS::LOADED) {
+        child = load_program(args);
+    }
 
-    // [> continue the execution <]
-    // ptrace(PTRACE_CONT, child, 0, 0);
+    while (true) {
+        vector<string> command = shell("> ");
 
-    // while (waitpid(child, &status, 0) > 0) {
-    // struct user_regs_struct regs;
-    // if (!WIFSTOPPED(status)) continue;
-    // if (ptrace(PTRACE_GETREGS, child, 0, &regs) != 0)
-    // errquit("ptrace(GETREGS)");
-    // if (regs.rip - 1 == target) {
-    // [> restore break point <]
-    // if (ptrace(PTRACE_POKETEXT, child, target, code) != 0)
-    // errquit("ptrace(POKETEXT)");
-    // [> set registers <]
-    // regs.rip = regs.rip - 1;
-    // regs.rdx = regs.rax;
-    // if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) errquit("ptrace(SETREGS)");
-    // }
-    // ptrace(PTRACE_CONT, child, 0, 0);
-    // }
+        switch (check_command(command)) {
+            case COMMAND_TYPE::EXIT:
+                return 0;
+            case COMMAND_TYPE::HELP:
+                help_message();
+
+                break;
+            case COMMAND_TYPE::LIST:
+                if (breakpoints.size() == 0) {
+                    cout << "no break point" << '\n';
+                }
+                else {
+                    int count = 0;
+                    for (auto breakpoint : breakpoints) {
+                        cout << (count++) << ": " << hex << breakpoint.first << '\n';
+                    }
+                }
+
+                break;
+            case COMMAND_TYPE::LOAD:
+                current_status = STATUS::LOADED;
+
+                args["program"] = command[0];
+
+                args["program_arguments"] = "";
+                for (size_t i = 0; i < command.size(); i++) {
+                    args["program_arguments"] += command[i];
+
+                    if (i != command.size() - 1) {
+                        args["program_arguments"] += " ";
+                    }
+                }
+
+                child = load_program(args);
+
+                break;
+            case COMMAND_TYPE::RUN:
+                current_status = STATUS::RUNNING;
+
+                ptrace(PTRACE_CONT, child, 0, 0);
+
+                break;
+            case COMMAND_TYPE::START:
+                current_status = STATUS::RUNNING;
+
+                ptrace(PTRACE_SINGLESTEP, child, 0, 0);
+                cout << "** pid " << child << '\n';
+
+                break;
+            case COMMAND_TYPE::BREAK:
+                break;
+            case COMMAND_TYPE::CONT:
+                ptrace(PTRACE_CONT, child, 0, 0);
+
+                break;
+            case COMMAND_TYPE::DELETE:
+                break;
+            case COMMAND_TYPE::DISASM:
+                break;
+            case COMMAND_TYPE::DUMP:
+                break;
+            case COMMAND_TYPE::GET:
+                break;
+            case COMMAND_TYPE::GETREGS:
+                break;
+            case COMMAND_TYPE::VMMAP: {
+                map<range_t, map_entry_t> vmmap;
+
+                load_maps(child, vmmap);
+                for (auto element : vmmap) {
+                    cout << element.second << '\n';
+                }
+
+                break;
+            }
+            case COMMAND_TYPE::SET:
+                break;
+            case COMMAND_TYPE::SI:
+                break;
+            case -1:
+                cerr << "[command] error, status: ";
+
+                switch (current_status) {
+                    case STATUS::NONE:
+                        cerr << "NONE, ";
+
+                        break;
+                    case STATUS::LOADED:
+                        cerr << "LOADED, ";
+
+                        break;
+                    case STATUS::RUNNING:
+                        cerr << "RUNNING, ";
+
+                        break;
+                    default:
+                        break;
+                }
+
+                cerr << command[0] << " not allow" << '\n';
+
+                break;
+            default:
+                break;
+        }
+    }
 
     return 0;
 }
