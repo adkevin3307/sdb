@@ -43,6 +43,8 @@ map<string, string> parse(int argc, char* argv[])
 
 vector<string> prompt(string message)
 {
+    usleep(3000);
+
     string buffer;
     vector<string> command;
 
@@ -149,8 +151,8 @@ bool operator<(range_t r1, range_t r2)
 
 ostream& operator<<(ostream& os, const map_entry_t& rhs)
 {
-    os << hex << setw(16) << setfill('0') << rhs.range.begin << '-';
-    os << hex << setw(16) << setfill('0') << rhs.range.end << ' ';
+    os << hex << setw(16) << setfill('0') << rhs.range.begin << dec << '-';
+    os << hex << setw(16) << setfill('0') << rhs.range.end << dec << ' ';
 
     os << ((rhs.permission & 0x04) ? 'r' : '-');
     os << ((rhs.permission & 0x02) ? 'w' : '-');

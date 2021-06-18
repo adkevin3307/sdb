@@ -9,6 +9,7 @@ enum STATUS {
 };
 
 enum COMMAND_TYPE {
+    UNKNOWN,
     BREAK,
     CONT,
     DELETE,

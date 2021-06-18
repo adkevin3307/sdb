@@ -64,7 +64,7 @@ void load_program(map<string, string>& args)
         ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_EXITKILL | PTRACE_O_TRACEEXEC);
 
         current_status = STATUS::LOADED;
-        cout << "** program '" << args["program"] << "' loaded. entry point 0x" << hex << header.e_entry << '\n';
+        cout << "** program '" << args["program"] << "' loaded. entry point 0x" << hex << header.e_entry << dec << '\n';
 
         signal(SIGCHLD, [](int signo) {
             int status;
@@ -105,7 +105,7 @@ int main(int argc, char* argv[])
                 else {
                     int count = 0;
                     for (auto breakpoint : breakpoints) {
-                        cout << (count++) << ": " << hex << breakpoint.first << '\n';
+                        cout << (count++) << ": " << hex << breakpoint.first << dec << '\n';
                     }
                 }
 
@@ -125,12 +125,22 @@ int main(int argc, char* argv[])
                 load_program(args);
 
                 break;
-            case COMMAND_TYPE::RUN:
+            case COMMAND_TYPE::RUN: {
+                STATUS origin_status = current_status;
                 current_status = STATUS::RUNNING;
+
+                if (origin_status == current_status) {
+                    cout << "** program" << args["program"] << " is already running." << '\n';
+                }
 
                 ptrace(PTRACE_CONT, child, 0, 0);
 
+                if (origin_status != current_status) {
+                    cout << "** pid " << child << '\n';
+                }
+
                 break;
+            }
             case COMMAND_TYPE::START:
                 current_status = STATUS::RUNNING;
 
@@ -168,7 +178,7 @@ int main(int argc, char* argv[])
                 break;
             case COMMAND_TYPE::SI:
                 break;
-            case -1:
+            case COMMAND_TYPE::UNKNOWN:
                 cerr << "[command] error, status: ";
 
                 switch (current_status) {

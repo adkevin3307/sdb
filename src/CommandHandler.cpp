@@ -68,11 +68,11 @@ COMMAND_TYPE const& CommandHandler::Command::command_type() const
     return this->m_command_type;
 }
 
-int CommandHandler::check(vector<string> command, STATUS status)
+COMMAND_TYPE CommandHandler::check(vector<string> command, STATUS status)
 {
     for (size_t i = 0; i < CommandHandler::m_commands.size(); i++) {
         if (CommandHandler::m_commands[i].check(command, status)) return CommandHandler::m_commands[i].command_type();
     }
 
-    return -1;
+    return COMMAND_TYPE::UNKNOWN;
 }

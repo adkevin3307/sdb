@@ -40,5 +40,5 @@ public:
     CommandHandler& operator=(CommandHandler const& rhs) = delete;
     CommandHandler& operator=(CommandHandler&& rhs) = delete;
 
-    static int check(std::vector<std::string> command, STATUS status);
+    static COMMAND_TYPE check(std::vector<std::string> command, STATUS status);
 };
