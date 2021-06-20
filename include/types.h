@@ -35,6 +35,7 @@ typedef struct {
 typedef struct {
     range_t range;
     int permission;
+    long offset;
     std::string node;
     std::string name;
 } map_entry_t;

@@ -82,18 +82,25 @@ void help_message()
     cout << "- start: start the program and stop at the first instruction" << '\n';
 }
 
-void dump_code(long addr, long code)
+void dump_code(unsigned long addr, unsigned long code[])
 {
-    fprintf(stderr, "## %lx: code = %02x %02x %02x %02x %02x %02x %02x %02x\n",
-            addr,
-            ((unsigned char*)(&code))[0],
-            ((unsigned char*)(&code))[1],
-            ((unsigned char*)(&code))[2],
-            ((unsigned char*)(&code))[3],
-            ((unsigned char*)(&code))[4],
-            ((unsigned char*)(&code))[5],
-            ((unsigned char*)(&code))[6],
-            ((unsigned char*)(&code))[7]);
+    printf("\t%lx:", addr);
+
+    for (auto i = 0; i < 16; i++) {
+        printf(" %02x", ((unsigned char*)code)[i]);
+    }
+
+    printf("  ");
+
+    printf("|");
+    for (auto i = 0; i < 16; i++) {
+        char c = ((char*)code)[i];
+
+        printf("%c", isprint(c) ? c : '.');
+    }
+    printf("|");
+
+    printf("\n");
 }
 
 int load_maps(pid_t pid, map<range_t, map_entry_t>& loaded)
@@ -130,12 +137,14 @@ int load_maps(pid_t pid, map<range_t, map_entry_t>& loaded)
         m.permission = 0;
 
         if (args[1][0] == 'r') m.permission |= 0x04;
-        if (args[1][0] == 'w') m.permission |= 0x02;
-        if (args[1][0] == 'x') m.permission |= 0x01;
+        if (args[1][1] == 'w') m.permission |= 0x02;
+        if (args[1][2] == 'x') m.permission |= 0x01;
+
+		m.offset = stol(args[2], NULL, 16);
 
         m.node = args[4];
+        m.name = args[5];
 
-        m.name = basename((char*)args[5].c_str());
         loaded[m.range] = m;
     }
 
@@ -151,8 +160,8 @@ bool operator<(range_t r1, range_t r2)
 
 ostream& operator<<(ostream& os, const map_entry_t& rhs)
 {
-    os << hex << setw(16) << setfill('0') << rhs.range.begin << dec << '-';
-    os << hex << setw(16) << setfill('0') << rhs.range.end << dec << ' ';
+    os << hex << setw(16) << setfill('0') << right << rhs.range.begin << dec << '-';
+    os << hex << setw(16) << setfill('0') << right << rhs.range.end << dec << ' ';
 
     os << ((rhs.permission & 0x04) ? 'r' : '-');
     os << ((rhs.permission & 0x02) ? 'w' : '-');
