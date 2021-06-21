@@ -197,7 +197,6 @@ int main(int argc, char* argv[])
                 }
 
                 unsigned long target = stoul(command[1], NULL, 16);
-
                 unsigned long code = ptrace(PTRACE_PEEKTEXT, child, target, 0);
 
                 if (BreakpointHandler::find(target) == -1) {
