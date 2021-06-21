@@ -62,26 +62,6 @@ vector<string> prompt(string message)
     return command;
 }
 
-void help_message()
-{
-    cout << "- break {instruction-address}: add a break point" << '\n';
-    cout << "- cont: continue execution" << '\n';
-    cout << "- delete {break-point-id}: remove a break point" << '\n';
-    cout << "- disasm addr: disassemble instructions in a file or a memory region" << '\n';
-    cout << "- dump addr [length]: dump memory content" << '\n';
-    cout << "- exit: terminate the debugger" << '\n';
-    cout << "- get reg: get a single value from a register" << '\n';
-    cout << "- getregs: show registers" << '\n';
-    cout << "- help: show this message" << '\n';
-    cout << "- list: list break points" << '\n';
-    cout << "- load {path/to/a/program}: load a program" << '\n';
-    cout << "- run: run the program" << '\n';
-    cout << "- vmmap: show memory layout" << '\n';
-    cout << "- set reg val: get a single value to a register" << '\n';
-    cout << "- si: step into instruction" << '\n';
-    cout << "- start: start the program and stop at the first instruction" << '\n';
-}
-
 void dump_code(unsigned long addr, unsigned long code[])
 {
     printf("\t%lx:", addr);

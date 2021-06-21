@@ -9,7 +9,6 @@
 
 std::map<std::string, std::string> parse(int argc, char* argv[]);
 std::vector<std::string> prompt(std::string message);
-void help_message();
 void dump_code(unsigned long addr, unsigned long code[]);
 int load_maps(pid_t pid, std::map<range_t, map_entry_t>& loaded);
 
