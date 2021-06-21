@@ -4,6 +4,7 @@
 #include <sstream>
 #include <vector>
 #include <iomanip>
+#include <fstream>
 #include <unistd.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
@@ -66,7 +67,6 @@ void load_program(map<string, string>& args)
     }
     else {
         waitpid(child, &wait_status, 0);
-
         ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_EXITKILL);
 
         current_status = STATUS::LOADED;
@@ -100,14 +100,20 @@ void restore_code()
 int main(int argc, char* argv[])
 {
     // TODO disasm
+    // TODO script
 
     map<string, string> args = parse(argc, argv);
     load_program(args);
 
     unsigned long target_address = 0;
 
+    fstream file;
+    if (args.find("script") != args.end()) {
+        file.open(args["script"]);
+    }
+
     while (true) {
-        vector<string> command = prompt("sdb> ");
+        vector<string> command = prompt("sdb> ", args.find("script") != args.end() ? file: cin);
 
         switch (CommandHandler::check(command, current_status)) {
             case COMMAND_TYPE::EXIT:
@@ -525,6 +531,10 @@ int main(int argc, char* argv[])
             int retval = WIFEXITED(wait_status);
             cout << "** child process " << child << " terminiated " << (retval == 0 ? "normally" : "abnormally") << " (code " << retval << ")" << '\n';
         }
+    }
+
+    if (args.find("script") != args.end()) {
+        file.close();
     }
 
     return 0;

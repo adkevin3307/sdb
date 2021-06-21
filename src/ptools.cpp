@@ -41,13 +41,13 @@ map<string, string> parse(int argc, char* argv[])
     return args;
 }
 
-vector<string> prompt(string message)
+vector<string> prompt(string message, istream& in)
 {
     string buffer;
     vector<string> command;
 
-    cout << message;
-    getline(cin, buffer);
+    cerr << message;
+    getline(in, buffer);
 
     stringstream ss;
     ss << buffer;
