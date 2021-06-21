@@ -43,8 +43,6 @@ map<string, string> parse(int argc, char* argv[])
 
 vector<string> prompt(string message)
 {
-    usleep(3000);
-
     string buffer;
     vector<string> command;
 
@@ -62,18 +60,18 @@ vector<string> prompt(string message)
     return command;
 }
 
-void dump_code(unsigned long addr, unsigned long code[])
+void dump_code(unsigned long addr, unsigned long code[], int length)
 {
     printf("\t%lx:", addr);
 
-    for (auto i = 0; i < 16; i++) {
+    for (auto i = 0; i < min(16, length); i++) {
         printf(" %02x", ((unsigned char*)code)[i]);
     }
 
     printf("  ");
 
     printf("|");
-    for (auto i = 0; i < 16; i++) {
+    for (auto i = 0; i < min(16, length); i++) {
         char c = ((char*)code)[i];
 
         printf("%c", isprint(c) ? c : '.');

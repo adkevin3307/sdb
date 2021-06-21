@@ -19,6 +19,7 @@ using namespace std;
 
 static STATUS current_status = STATUS::NONE;
 static pid_t child = -1;
+static int wait_status = -1;
 
 void load_program(map<string, string>& args)
 {
@@ -64,27 +65,35 @@ void load_program(map<string, string>& args)
         exit(EXIT_SUCCESS);
     }
     else {
-        int status;
-        waitpid(child, &status, 0);
+        waitpid(child, &wait_status, 0);
 
         ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_EXITKILL);
 
         current_status = STATUS::LOADED;
         cout << "** program '" << args["program"] << "' loaded. entry point 0x" << hex << header.e_entry << dec << '\n';
+    }
+}
 
-        signal(SIGCHLD, [](int signo) {
-            int status;
-            if (waitpid(child, &status, WNOHANG) != child) return;
+void restore_code()
+{
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, child, 0, &regs);
 
-            if (WIFEXITED(status)) {
-                current_status = STATUS::NONE;
+    unsigned long code = ptrace(PTRACE_PEEKTEXT, child, regs.rip - 1, 0);
 
-                BreakpointHandler::clear();
+    if ((code & 0xff) == 0xcc) {
+        code = ((code & 0xffffffffffffff00) | BreakpointHandler::get(BreakpointHandler::find(regs.rip - 1)).code);
 
-                int retval = WEXITSTATUS(status);
-                cout << "** child process " << child << " terminiated " << (retval == 0 ? "normally" : "abnormally") << " (code " << retval << ")" << '\n';
-            }
-        });
+        if (ptrace(PTRACE_POKETEXT, child, regs.rip - 1, code) != 0) {
+            cerr << "[ptrace] error, restore code" << '\n';
+        }
+
+        regs.rip -= 1;
+        regs.rdx = regs.rax;
+
+        if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
+            cerr << "[ptrace] error, set regs" << '\n';
+        }
     }
 }
 
@@ -158,11 +167,14 @@ int main(int argc, char* argv[])
                     cout << "** program" << args["program"] << " is already running." << '\n';
                 }
 
+                restore_code();
                 ptrace(PTRACE_CONT, child, 0, 0);
 
                 if (origin_status != current_status) {
                     cout << "** pid " << child << '\n';
                 }
+
+                waitpid(child, &wait_status, 0);
 
                 break;
             }
@@ -190,31 +202,12 @@ int main(int argc, char* argv[])
 
                 break;
             }
-            case COMMAND_TYPE::CONT: {
-                struct user_regs_struct regs;
-                ptrace(PTRACE_GETREGS, child, 0, &regs);
-
-                unsigned long code = ptrace(PTRACE_PEEKTEXT, child, regs.rip - 1, 0);
-
-                if ((code & 0xff) == 0xcc) {
-                    code = ((code & 0xffffffffffffff00) | BreakpointHandler::get(BreakpointHandler::find(regs.rip - 1)).code);
-
-                    if (ptrace(PTRACE_POKETEXT, child, regs.rip - 1, code) != 0) {
-                        cerr << "[ptrace] error, restore code" << '\n';
-                    }
-
-                    regs.rip -= 1;
-                    regs.rdx = regs.rax;
-
-                    if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
-                        cerr << "[ptrace] error, set regs" << '\n';
-                    }
-                }
-
+            case COMMAND_TYPE::CONT:
+                restore_code();
                 ptrace(PTRACE_CONT, child, 0, 0);
+                waitpid(child, &wait_status, 0);
 
                 break;
-            }
             case COMMAND_TYPE::DELETE: {
                 int index = stoi(command[1]);
 
@@ -238,12 +231,17 @@ int main(int argc, char* argv[])
             }
             case COMMAND_TYPE::DISASM:
                 break;
-            case COMMAND_TYPE::DUMP:
-                if (command.size() == 2) {
+            case COMMAND_TYPE::DUMP: {
+                if (command.size() >= 2) {
                     target_address = stoul(command[1], NULL, 16);
                 }
 
-                for (auto i = 0; i < 5; i++) {
+                int length = 80;
+                if (command.size() >= 3) {
+                    length = stoi(command[2]);
+                }
+
+                for (auto i = 0; i < (int)length / 16; i++) {
                     unsigned long code[2];
 
                     code[0] = ptrace(PTRACE_PEEKTEXT, child, target_address, 0);
@@ -253,45 +251,119 @@ int main(int argc, char* argv[])
                     target_address += 16;
                 }
 
+                if (length % 16 != 0) {
+                    unsigned long code[2];
+
+                    code[0] = ptrace(PTRACE_PEEKTEXT, child, target_address, 0);
+                    code[1] = ptrace(PTRACE_PEEKTEXT, child, target_address + 8, 0);
+
+                    dump_code(target_address, code, length % 16);
+                    target_address += (length % 16);
+                }
+
                 break;
-            case COMMAND_TYPE::GET:
+            }
+            case COMMAND_TYPE::GET: {
+                struct user_regs_struct regs;
+                ptrace(PTRACE_GETREGS, child, 0, &regs);
+
+                unsigned long long* target_reg = NULL;
+
+                if (command[1] == "rax") {
+                    target_reg = &(regs.rax);
+                }
+                else if (command[1] == "rbx") {
+                    target_reg = &(regs.rbx);
+                }
+                else if (command[1] == "rcx") {
+                    target_reg = &(regs.rcx);
+                }
+                else if (command[1] == "rdx") {
+                    target_reg = &(regs.rdx);
+                }
+                else if (command[1] == "r8") {
+                    target_reg = &(regs.r8);
+                }
+                else if (command[1] == "r9") {
+                    target_reg = &(regs.r9);
+                }
+                else if (command[1] == "r10") {
+                    target_reg = &(regs.r10);
+                }
+                else if (command[1] == "r11") {
+                    target_reg = &(regs.r11);
+                }
+                else if (command[1] == "r12") {
+                    target_reg = &(regs.r12);
+                }
+                else if (command[1] == "r13") {
+                    target_reg = &(regs.r13);
+                }
+                else if (command[1] == "r14") {
+                    target_reg = &(regs.r14);
+                }
+                else if (command[1] == "r15") {
+                    target_reg = &(regs.r15);
+                }
+                else if (command[1] == "rdi") {
+                    target_reg = &(regs.rdi);
+                }
+                else if (command[1] == "rsi") {
+                    target_reg = &(regs.rsi);
+                }
+                else if (command[1] == "rbp") {
+                    target_reg = &(regs.rbp);
+                }
+                else if (command[1] == "rsp") {
+                    target_reg = &(regs.rsp);
+                }
+                else if (command[1] == "rip") {
+                    target_reg = &(regs.rip);
+                }
+                else if (command[1] == "flags") {
+                    target_reg = &(regs.eflags);
+                }
+
+                cout << command[1] << " = " << (*target_reg) << hex << " (0x" << (*target_reg) << ")" << dec << '\n';
+
                 break;
+            }
             case COMMAND_TYPE::GETREGS: {
                 struct user_regs_struct regs;
                 ptrace(PTRACE_GETREGS, child, 0, &regs);
 
                 cout << hex;
 
-                cout << "RAX " << setw(19) << left << regs.rax;
-                cout << "RBX " << setw(19) << left << regs.rbx;
-                cout << "RCX " << setw(19) << left << regs.rcx;
-                cout << "RDX " << setw(19) << left << regs.rdx;
+                cout << "RAX " << setw(18) << left << regs.rax;
+                cout << "RBX " << setw(18) << left << regs.rbx;
+                cout << "RCX " << setw(18) << left << regs.rcx;
+                cout << "RDX " << setw(18) << left << regs.rdx;
 
                 cout << '\n';
 
-                cout << "R8  " << setw(19) << left << regs.r8;
-                cout << "R9  " << setw(19) << left << regs.r9;
-                cout << "R10 " << setw(19) << left << regs.r10;
-                cout << "R11 " << setw(19) << left << regs.r11;
+                cout << "R8  " << setw(18) << left << regs.r8;
+                cout << "R9  " << setw(18) << left << regs.r9;
+                cout << "R10 " << setw(18) << left << regs.r10;
+                cout << "R11 " << setw(18) << left << regs.r11;
 
                 cout << '\n';
 
-                cout << "R12 " << setw(19) << left << regs.r12;
-                cout << "R13 " << setw(19) << left << regs.r13;
-                cout << "R14 " << setw(19) << left << regs.r14;
-                cout << "R15 " << setw(19) << left << regs.r15;
+                cout << "R12 " << setw(18) << left << regs.r12;
+                cout << "R13 " << setw(18) << left << regs.r13;
+                cout << "R14 " << setw(18) << left << regs.r14;
+                cout << "R15 " << setw(18) << left << regs.r15;
 
                 cout << '\n';
 
-                cout << "RDI " << setw(19) << left << regs.rdi;
-                cout << "RSI " << setw(19) << left << regs.rsi;
-                cout << "RBP " << setw(19) << left << regs.rbp;
-                cout << "RSP " << setw(19) << left << regs.rsp;
+                cout << "RDI " << setw(18) << left << regs.rdi;
+                cout << "RSI " << setw(18) << left << regs.rsi;
+                cout << "RBP " << setw(18) << left << regs.rbp;
+                cout << "RSP " << setw(18) << left << regs.rsp;
 
                 cout << '\n';
 
-                cout << "RIP " << setw(19) << left << regs.rip;
-                cout << "FLAGS " << setw(19) << left << regs.fs;
+                cout << "RIP " << setw(18) << left << regs.rip;
+                cout << "FLAGS " << setw(16) << setfill('0') << right << regs.eflags;
 
                 cout << '\n';
 
@@ -313,9 +385,64 @@ int main(int argc, char* argv[])
                 struct user_regs_struct regs;
                 ptrace(PTRACE_GETREGS, child, 0, &regs);
 
-                if (command[1] == "rip") {
-                    regs.rip = stoul(command[2], NULL, 16);
+                unsigned long long* target_reg = NULL;
+
+                if (command[1] == "rax") {
+                    target_reg = &(regs.rax);
                 }
+                else if (command[1] == "rbx") {
+                    target_reg = &(regs.rbx);
+                }
+                else if (command[1] == "rcx") {
+                    target_reg = &(regs.rcx);
+                }
+                else if (command[1] == "rdx") {
+                    target_reg = &(regs.rdx);
+                }
+                else if (command[1] == "r8") {
+                    target_reg = &(regs.r8);
+                }
+                else if (command[1] == "r9") {
+                    target_reg = &(regs.r9);
+                }
+                else if (command[1] == "r10") {
+                    target_reg = &(regs.r10);
+                }
+                else if (command[1] == "r11") {
+                    target_reg = &(regs.r11);
+                }
+                else if (command[1] == "r12") {
+                    target_reg = &(regs.r12);
+                }
+                else if (command[1] == "r13") {
+                    target_reg = &(regs.r13);
+                }
+                else if (command[1] == "r14") {
+                    target_reg = &(regs.r14);
+                }
+                else if (command[1] == "r15") {
+                    target_reg = &(regs.r15);
+                }
+                else if (command[1] == "rdi") {
+                    target_reg = &(regs.rdi);
+                }
+                else if (command[1] == "rsi") {
+                    target_reg = &(regs.rsi);
+                }
+                else if (command[1] == "rbp") {
+                    target_reg = &(regs.rbp);
+                }
+                else if (command[1] == "rsp") {
+                    target_reg = &(regs.rsp);
+                }
+                else if (command[1] == "rip") {
+                    target_reg = &(regs.rip);
+                }
+                else if (command[1] == "flags") {
+                    target_reg = &(regs.eflags);
+                }
+
+                (*target_reg) = stoul(command[2], NULL, 16);
 
                 if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
                     cerr << "[ptrace] error, set regs" << '\n';
@@ -324,6 +451,10 @@ int main(int argc, char* argv[])
                 break;
             }
             case COMMAND_TYPE::SI:
+                restore_code();
+                ptrace(PTRACE_SINGLESTEP, child, 0, 0);
+                waitpid(child, &wait_status, 0);
+
                 break;
             case COMMAND_TYPE::UNKNOWN:
                 cerr << "[command] error, status: ";
@@ -350,6 +481,15 @@ int main(int argc, char* argv[])
                 break;
             default:
                 break;
+        }
+
+        if (WIFSTOPPED(wait_status) == 0) {
+            current_status = STATUS::NONE;
+
+            BreakpointHandler::clear();
+
+            int retval = WIFEXITED(wait_status);
+            cout << "** child process " << child << " terminiated " << (retval == 0 ? "normally" : "abnormally") << " (code " << retval << ")" << '\n';
         }
     }
 
