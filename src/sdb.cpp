@@ -113,7 +113,14 @@ int main(int argc, char* argv[])
     }
 
     while (true) {
-        vector<string> command = prompt("sdb> ", args.find("script") != args.end() ? file: cin);
+        vector<string> command;
+
+        if (args.find("script") != args.end()) {
+            command = prompt("", file);
+        }
+        else {
+            command = prompt("> ", cin);
+        }
 
         switch (CommandHandler::check(command, current_status)) {
             case COMMAND_TYPE::EXIT:
@@ -482,7 +489,15 @@ int main(int argc, char* argv[])
                     target_reg = &(regs.eflags);
                 }
 
-                (*target_reg) = stoul(command[2]);
+                if (command[2].substr(0, 2) == "0b") {
+                    (*target_reg) = stoul(command[2], NULL, 2);
+                }
+                else if (command[2].substr(0, 2) == "0x") {
+                    (*target_reg) = stoul(command[2], NULL, 16);
+                }
+                else {
+                    (*target_reg) = stoul(command[2]);
+                }
 
                 if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
                     cerr << "** [ptrace] error, set regs" << '\n';
