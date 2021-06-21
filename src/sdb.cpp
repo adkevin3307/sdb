@@ -28,7 +28,7 @@ void load_program(map<string, string>& args)
     FILE* file = fopen(args["program"].c_str(), "rb");
 
     if (!file) {
-        cerr << "[load] error, program not found" << '\n';
+        cerr << "** [load] error, program not found" << '\n';
 
         return;
     }
@@ -39,7 +39,7 @@ void load_program(map<string, string>& args)
     fclose(file);
 
     if ((child = fork()) < 0) {
-        cerr << "[fork] error" << '\n';
+        cerr << "** [fork] error" << '\n';
 
         exit(EXIT_FAILURE);
     }
@@ -55,7 +55,7 @@ void load_program(map<string, string>& args)
         arguments.push_back(NULL);
 
         if (ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) {
-            cerr << "[ptrace] error, traceme" << '\n';
+            cerr << "** [ptrace] error, traceme" << '\n';
 
             exit(EXIT_FAILURE);
         }
@@ -85,31 +85,29 @@ void restore_code()
         code = ((code & 0xffffffffffffff00) | BreakpointHandler::get(BreakpointHandler::find(regs.rip - 1)).code);
 
         if (ptrace(PTRACE_POKETEXT, child, regs.rip - 1, code) != 0) {
-            cerr << "[ptrace] error, restore code" << '\n';
+            cerr << "** [ptrace] error, restore code" << '\n';
         }
 
         regs.rip -= 1;
         regs.rdx = regs.rax;
 
         if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
-            cerr << "[ptrace] error, set regs" << '\n';
+            cerr << "** [ptrace] error, set regs" << '\n';
         }
     }
 }
 
 int main(int argc, char* argv[])
 {
-    // TODO check argument length
-    // TODO handle breakpoint, run, si, cont
+    // TODO disasm
 
     map<string, string> args = parse(argc, argv);
-
     load_program(args);
 
     unsigned long target_address = 0;
 
     while (true) {
-        vector<string> command = prompt("> ");
+        vector<string> command = prompt("sdb> ");
 
         switch (CommandHandler::check(command, current_status)) {
             case COMMAND_TYPE::EXIT:
@@ -145,6 +143,12 @@ int main(int argc, char* argv[])
 
                 break;
             case COMMAND_TYPE::LOAD:
+                if (command.size() < 2) {
+                    cerr << "** [command] error, argument not enough" << '\n';
+
+                    break;
+                }
+
                 args["program"] = command[1];
 
                 args["program_arguments"] = "";
@@ -186,14 +190,21 @@ int main(int argc, char* argv[])
                 break;
             }
             case COMMAND_TYPE::BREAK: {
+                if (command.size() < 2) {
+                    cerr << "** [command] error, argument not enough" << '\n';
+
+                    break;
+                }
+
                 unsigned long target = stoul(command[1], NULL, 16);
+
                 unsigned long code = ptrace(PTRACE_PEEKTEXT, child, target, 0);
 
                 if (BreakpointHandler::find(target) == -1) {
                     BreakpointHandler::add(target, code & 0xff);
 
                     if (ptrace(PTRACE_POKETEXT, child, target, (code & 0xffffffffffffff00) | 0xcc) != 0) {
-                        cerr << "[ptrace] error, set breakpoint" << '\n';
+                        cerr << "** [ptrace] error, set breakpoint" << '\n';
                     }
                 }
                 else {
@@ -209,6 +220,12 @@ int main(int argc, char* argv[])
 
                 break;
             case COMMAND_TYPE::DELETE: {
+                if (command.size() < 2) {
+                    cerr << "** [command] error, argument not enough" << '\n';
+
+                    break;
+                }
+
                 int index = stoi(command[1]);
 
                 if (index < BreakpointHandler::size()) {
@@ -218,7 +235,7 @@ int main(int argc, char* argv[])
                     code = ((code & 0xffffffffffffff00) | BreakpointHandler::get(index).code);
 
                     if (ptrace(PTRACE_POKETEXT, child, target, code) != 0) {
-                        cerr << "[ptrace] error, delete breakpoint" << '\n';
+                        cerr << "** [ptrace] error, delete breakpoint" << '\n';
                     }
 
                     BreakpointHandler::remove(index);
@@ -230,6 +247,12 @@ int main(int argc, char* argv[])
                 break;
             }
             case COMMAND_TYPE::DISASM:
+                if (command.size() < 2) {
+                    cerr << "** [command] error, argument not enough" << '\n';
+
+                    break;
+                }
+
                 break;
             case COMMAND_TYPE::DUMP: {
                 if (command.size() >= 2) {
@@ -264,6 +287,12 @@ int main(int argc, char* argv[])
                 break;
             }
             case COMMAND_TYPE::GET: {
+                if (command.size() < 2) {
+                    cerr << "** [command] error, argument not enough" << '\n';
+
+                    break;
+                }
+
                 struct user_regs_struct regs;
                 ptrace(PTRACE_GETREGS, child, 0, &regs);
 
@@ -382,6 +411,12 @@ int main(int argc, char* argv[])
                 break;
             }
             case COMMAND_TYPE::SET: {
+                if (command.size() < 3) {
+                    cerr << "** [command] error, argument not enough" << '\n';
+
+                    break;
+                }
+
                 struct user_regs_struct regs;
                 ptrace(PTRACE_GETREGS, child, 0, &regs);
 
@@ -442,10 +477,10 @@ int main(int argc, char* argv[])
                     target_reg = &(regs.eflags);
                 }
 
-                (*target_reg) = stoul(command[2], NULL, 16);
+                (*target_reg) = stoul(command[2]);
 
                 if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
-                    cerr << "[ptrace] error, set regs" << '\n';
+                    cerr << "** [ptrace] error, set regs" << '\n';
                 }
 
                 break;
@@ -457,7 +492,7 @@ int main(int argc, char* argv[])
 
                 break;
             case COMMAND_TYPE::UNKNOWN:
-                cerr << "[command] error, status: ";
+                cerr << "** [command] error, status: ";
 
                 switch (current_status) {
                     case STATUS::NONE:
