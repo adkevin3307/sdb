@@ -13,12 +13,12 @@
 #include "types.h"
 #include "ptools.h"
 #include "CommandHandler.h"
+#include "BreakpointHandler.h"
 
 using namespace std;
 
 static STATUS current_status = STATUS::NONE;
 static pid_t child = -1;
-static map<unsigned long, unsigned long> breakpoints;
 
 void load_program(map<string, string>& args)
 {
@@ -79,7 +79,7 @@ void load_program(map<string, string>& args)
             if (WIFEXITED(status)) {
                 current_status = STATUS::NONE;
 
-                breakpoints.clear();
+                BreakpointHandler::clear();
 
                 int retval = WEXITSTATUS(status);
                 cout << "** child process " << child << " terminiated " << (retval == 0 ? "normally" : "abnormally") << " (code " << retval << ")" << '\n';
@@ -125,13 +125,12 @@ int main(int argc, char* argv[])
 
                 break;
             case COMMAND_TYPE::LIST:
-                if (breakpoints.size() == 0) {
+                if (BreakpointHandler::size() == 0) {
                     cout << "no break point" << '\n';
                 }
                 else {
-                    int count = 0;
-                    for (auto breakpoint : breakpoints) {
-                        cout << (count++) << ": " << hex << breakpoint.first << dec << '\n';
+                    for (int i = 0; i < BreakpointHandler::size(); i++) {
+                        cout << i << ": " << hex << BreakpointHandler::get(i).address << dec << '\n';
                     }
                 }
 
@@ -178,8 +177,8 @@ int main(int argc, char* argv[])
                 unsigned long target = stoul(command[1], NULL, 16);
                 unsigned long code = ptrace(PTRACE_PEEKTEXT, child, target, 0);
 
-                if (breakpoints.find(target) == breakpoints.end()) {
-                    breakpoints[target] = (code & 0xff);
+                if (BreakpointHandler::find(target) == -1) {
+                    BreakpointHandler::add(target, code & 0xff);
 
                     if (ptrace(PTRACE_POKETEXT, child, target, (code & 0xffffffffffffff00) | 0xcc) != 0) {
                         cerr << "[ptrace] error, set breakpoint" << '\n';
@@ -195,16 +194,10 @@ int main(int argc, char* argv[])
                 struct user_regs_struct regs;
                 ptrace(PTRACE_GETREGS, child, 0, &regs);
 
-                cout << "now: " << hex << regs.rip - 1 << dec << '\n';
-                for (auto breakpoint : breakpoints) {
-                    cout << hex << breakpoint.first << ": " << breakpoint.second << dec << '\n';
-                }
-
                 unsigned long code = ptrace(PTRACE_PEEKTEXT, child, regs.rip - 1, 0);
 
                 if ((code & 0xff) == 0xcc) {
-                    code = ((code & 0xffffffffffffff00) | breakpoints[regs.rip - 1]);
-                    cout << "cc: " << hex << code << dec << '\n';
+                    code = ((code & 0xffffffffffffff00) | BreakpointHandler::get(BreakpointHandler::find(regs.rip - 1)).code);
 
                     if (ptrace(PTRACE_POKETEXT, child, regs.rip - 1, code) != 0) {
                         cerr << "[ptrace] error, restore code" << '\n';
@@ -223,18 +216,22 @@ int main(int argc, char* argv[])
                 break;
             }
             case COMMAND_TYPE::DELETE: {
-                unsigned long target = stoul(command[1], NULL, 16);
-                unsigned long code = ptrace(PTRACE_PEEKTEXT, child, target, 0);
+                int index = stoi(command[1]);
 
-                if (breakpoints.find(target) == breakpoints.end()) {
-                    cout << "** breakpoint not found" << '\n';
-                }
-                else {
-                    code = ((code & 0xffffffffffffff00) | breakpoints[target]);
+                if (index < BreakpointHandler::size()) {
+                    unsigned long target = BreakpointHandler::get(index).address;
+                    unsigned long code = ptrace(PTRACE_PEEKTEXT, child, target, 0);
+
+                    code = ((code & 0xffffffffffffff00) | BreakpointHandler::get(index).code);
 
                     if (ptrace(PTRACE_POKETEXT, child, target, code) != 0) {
                         cerr << "[ptrace] error, delete breakpoint" << '\n';
                     }
+
+                    BreakpointHandler::remove(index);
+                }
+                else {
+                    cout << "breakpoint not exist" << '\n';
                 }
 
                 break;
@@ -312,8 +309,20 @@ int main(int argc, char* argv[])
 
                 break;
             }
-            case COMMAND_TYPE::SET:
+            case COMMAND_TYPE::SET: {
+                struct user_regs_struct regs;
+                ptrace(PTRACE_GETREGS, child, 0, &regs);
+
+                if (command[1] == "rip") {
+                    regs.rip = stoul(command[2], NULL, 16);
+                }
+
+                if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
+                    cerr << "[ptrace] error, set regs" << '\n';
+                }
+
                 break;
+            }
             case COMMAND_TYPE::SI:
                 break;
             case COMMAND_TYPE::UNKNOWN:
