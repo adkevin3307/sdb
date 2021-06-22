@@ -62,7 +62,7 @@ vector<string> prompt(string message, istream& in)
 
 void dump_code(unsigned long addr, unsigned long code[], int length)
 {
-    printf("\t%lx:", addr);
+    printf("%12lx:", addr);
 
     for (auto i = 0; i < min(16, length); i++) {
         printf(" %02x", ((unsigned char*)code)[i]);

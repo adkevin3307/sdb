@@ -7,7 +7,7 @@ OBJS = $(addprefix $(OBJ_DIR)/, $(patsubst %.cpp, %.o, $(notdir $(SOURCES))))
 
 CXXFLAGS = -std=c++17 -Iinclude -O3 -Wall
 
-LIBS =
+LIBS = -lcapstone
 
 all: create_object_directory $(EXE)
 	@echo Compile Success

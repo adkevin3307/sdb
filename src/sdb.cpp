@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #include <elf.h>
 #include <sys/user.h>
+#include <capstone/capstone.h>
 
 #include "types.h"
 #include "ptools.h"
@@ -99,13 +100,10 @@ void restore_code()
 
 int main(int argc, char* argv[])
 {
-    // TODO disasm
-    // TODO script
+    // TODO disasm amount
 
     map<string, string> args = parse(argc, argv);
     load_program(args);
-
-    unsigned long target_address = 0;
 
     fstream file;
     if (args.find("script") != args.end()) {
@@ -117,6 +115,8 @@ int main(int argc, char* argv[])
 
         if (args.find("script") != args.end()) {
             command = prompt("", file);
+
+            if (file.eof()) break;
         }
         else {
             command = prompt("> ", cin);
@@ -258,18 +258,63 @@ int main(int argc, char* argv[])
 
                 break;
             }
-            case COMMAND_TYPE::DISASM:
+            case COMMAND_TYPE::DISASM: {
                 if (command.size() < 2) {
                     cerr << "** [command] error, argument not enough" << '\n';
 
                     break;
                 }
 
-                break;
-            case COMMAND_TYPE::DUMP: {
-                if (command.size() >= 2) {
-                    target_address = stoul(command[1], NULL, 16);
+                unsigned long target = stoul(command[1], NULL, 16);
+
+                csh handle;
+                cs_insn* insn;
+
+                if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
+                    cerr << "** [capstone] error, cs_open fail" << '\n';
                 }
+
+                unsigned long code[7];
+                for (auto i = 0; i < 7; i++) {
+                    code[i] = ptrace(PTRACE_PEEKTEXT, child, target + 8 * i, 0);
+                }
+
+                size_t count = cs_disasm(handle, (unsigned char*)code, 50, target, 0, &insn);
+
+                if (count > 0) {
+                    for (size_t i = 0; i < count && i < 10; i++) {
+                        cout << hex << setw(12) << setfill(' ') << right << insn[i].address << dec << ":";
+
+                        for (size_t j = 0; j < 16; j++) {
+                            cout << ' ';
+
+                            if (j < insn[i].size) {
+                                cout << hex << setw(2) << setfill('0') << (unsigned int)insn[i].bytes[j] << dec;
+                            }
+                            else {
+                                cout << "  ";
+                            }
+                        }
+
+                        cout << insn[i].mnemonic << '\t' << insn[i].op_str << '\n';
+                    }
+
+                    cs_free(insn, count);
+                }
+                else {
+                    cerr << "** [capstone] error, disassemble fail" << '\n';
+                }
+
+                break;
+            }
+            case COMMAND_TYPE::DUMP: {
+                if (command.size() < 2) {
+                    cerr << "** [command] error, argument not enough" << '\n';
+
+                    break;
+                }
+
+                unsigned long target = stoul(command[1], NULL, 16);
 
                 int length = 80;
                 if (command.size() >= 3) {
@@ -279,21 +324,21 @@ int main(int argc, char* argv[])
                 for (auto i = 0; i < (int)length / 16; i++) {
                     unsigned long code[2];
 
-                    code[0] = ptrace(PTRACE_PEEKTEXT, child, target_address, 0);
-                    code[1] = ptrace(PTRACE_PEEKTEXT, child, target_address + 8, 0);
+                    code[0] = ptrace(PTRACE_PEEKTEXT, child, target, 0);
+                    code[1] = ptrace(PTRACE_PEEKTEXT, child, target + 8, 0);
 
-                    dump_code(target_address, code);
-                    target_address += 16;
+                    dump_code(target, code);
+                    target += 16;
                 }
 
                 if (length % 16 != 0) {
                     unsigned long code[2];
 
-                    code[0] = ptrace(PTRACE_PEEKTEXT, child, target_address, 0);
-                    code[1] = ptrace(PTRACE_PEEKTEXT, child, target_address + 8, 0);
+                    code[0] = ptrace(PTRACE_PEEKTEXT, child, target, 0);
+                    code[1] = ptrace(PTRACE_PEEKTEXT, child, target + 8, 0);
 
-                    dump_code(target_address, code, length % 16);
-                    target_address += (length % 16);
+                    dump_code(target, code, length % 16);
+                    target += (length % 16);
                 }
 
                 break;
@@ -543,8 +588,7 @@ int main(int argc, char* argv[])
 
             BreakpointHandler::clear();
 
-            int retval = WIFEXITED(wait_status);
-            cout << "** child process " << child << " terminiated " << (retval == 0 ? "normally" : "abnormally") << " (code " << retval << ")" << '\n';
+            cout << "** child process " << child << " terminiated " << (WIFEXITED(wait_status) ? "normally" : "abnormally") << " (code " << wait_status << ")" << '\n';
         }
     }
 
