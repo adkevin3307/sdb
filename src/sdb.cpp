@@ -117,8 +117,13 @@ void load_program(map<string, string>& args)
             cerr << "** [capstone] error, disassemble fail" << '\n';
         }
 
+        ios state(nullptr);
+        state.copyfmt(cout);
+
         current_status = STATUS::LOADED;
-        cout << "** program '" << args["program"] << "' loaded. entry point 0x" << hex << e_header.e_entry << dec << '\n';
+        cout << "** program '" << args["program"] << "' loaded. entry point 0x" << hex << e_header.e_entry << '\n';
+
+        cout.copyfmt(state);
     }
 }
 
@@ -140,6 +145,9 @@ void restore_code()
 
 void check_breakpoint()
 {
+    ios state(nullptr);
+    state.copyfmt(cout);
+
     struct user_regs_struct regs;
     ptrace(PTRACE_GETREGS, child, 0, &regs);
 
@@ -164,6 +172,8 @@ void check_breakpoint()
             cerr << "** [ptrace] error, set regs";
         }
     }
+
+    cout.copyfmt(state);
 }
 
 int main(int argc, char* argv[])
@@ -210,7 +220,10 @@ int main(int argc, char* argv[])
                 cout << "- start: start the program and stop at the first instruction" << '\n';
 
                 break;
-            case COMMAND_TYPE::LIST:
+            case COMMAND_TYPE::LIST: {
+                ios state(nullptr);
+                state.copyfmt(cout);
+
                 if (BreakpointHandler::size() == 0) {
                     cout << "no break point" << '\n';
                 }
@@ -220,7 +233,10 @@ int main(int argc, char* argv[])
                     }
                 }
 
+                cout.copyfmt(state);
+
                 break;
+            }
             case COMMAND_TYPE::LOAD:
                 if (command.size() < 2) {
                     cerr << "** [command] error, argument not enough" << '\n';
@@ -413,6 +429,9 @@ int main(int argc, char* argv[])
                     break;
                 }
 
+                ios state(nullptr);
+                state.copyfmt(cout);
+
                 struct user_regs_struct regs;
                 ptrace(PTRACE_GETREGS, child, 0, &regs);
 
@@ -473,7 +492,9 @@ int main(int argc, char* argv[])
                     target_reg = &(regs.eflags);
                 }
 
-                cout << command[1] << " = " << (*target_reg) << hex << " (0x" << (*target_reg) << ")" << dec << '\n';
+                cout << command[1] << " = " << dec << (*target_reg) << hex << " (0x" << (*target_reg) << ")" << dec << '\n';
+
+                cout.copyfmt(state);
 
                 break;
             }
@@ -664,7 +685,12 @@ int main(int argc, char* argv[])
 
             BreakpointHandler::clear();
 
-            cout << "** child process " << child << " terminiated " << (WIFEXITED(wait_status) ? "normally" : "abnormally") << " (code " << wait_status << ")" << '\n';
+            ios state(nullptr);
+            state.copyfmt(cout);
+
+            cout << "** child process " << dec << child << " terminiated " << (WIFEXITED(wait_status) ? "normally" : "abnormally") << " (code " << wait_status << ")" << '\n';
+
+            cout.copyfmt(state);
         }
     }
 
