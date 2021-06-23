@@ -23,6 +23,7 @@ static STATUS current_status = STATUS::NONE;
 static pid_t child = -1;
 static int wait_status = -1;
 map<unsigned long, cs_insn> instructions;
+range_t text_address;
 
 void load_program(map<string, string>& args)
 {
@@ -86,6 +87,9 @@ void load_program(map<string, string>& args)
             string section_name = sh_str.data() + s_header.sh_name;
 
             if (section_name == ".text") {
+                text_address.begin = e_header.e_entry;
+                text_address.end = e_header.e_entry + s_header.sh_size;
+
                 text_buffer.resize(s_header.sh_size);
 
                 lseek(fd, s_header.sh_offset, SEEK_SET);
@@ -358,7 +362,10 @@ int main(int argc, char* argv[])
 
                 unsigned long target = stoul(command[1], NULL, 16);
 
+                int count = 0;
                 for (auto instruction : instructions) {
+                    if (count >= 10) break;
+
                     if (instruction.first >= target) {
                         cout << hex << setw(12) << setfill(' ') << right << instruction.first << ":";
 
@@ -374,6 +381,8 @@ int main(int argc, char* argv[])
                         }
 
                         cout << instruction.second.mnemonic << '\t' << instruction.second.op_str << '\n';
+
+                        count += 1;
                     }
                 }
 
@@ -392,6 +401,8 @@ int main(int argc, char* argv[])
                 state.copyfmt(cout);
 
                 unsigned long target = stoul(command[1], NULL, 16);
+
+                if (target < text_address.begin || target >= text_address.end) break;
 
                 int length = 80;
                 if (command.size() >= 3) {
@@ -492,7 +503,12 @@ int main(int argc, char* argv[])
                     target_reg = &(regs.eflags);
                 }
 
-                cout << command[1] << " = " << dec << (*target_reg) << hex << " (0x" << (*target_reg) << ")" << dec << '\n';
+                if (target_reg == NULL) {
+                    cerr << "** [reg] error, wrong reg name" << '\n';
+                }
+                else {
+                    cout << command[1] << " = " << dec << (*target_reg) << hex << " (0x" << (*target_reg) << ")" << dec << '\n';
+                }
 
                 cout.copyfmt(state);
 
@@ -628,18 +644,23 @@ int main(int argc, char* argv[])
                     target_reg = &(regs.eflags);
                 }
 
-                if (command[2].substr(0, 2) == "0b") {
-                    (*target_reg) = stoul(command[2], NULL, 2);
-                }
-                else if (command[2].substr(0, 2) == "0x") {
-                    (*target_reg) = stoul(command[2], NULL, 16);
+                if (target_reg == NULL) {
+                    cerr << "** [reg] error, wrong reg name" << '\n';
                 }
                 else {
-                    (*target_reg) = stoul(command[2]);
-                }
+                    if (command[2].substr(0, 2) == "0b") {
+                        (*target_reg) = stoul(command[2], NULL, 2);
+                    }
+                    else if (command[2].substr(0, 2) == "0x") {
+                        (*target_reg) = stoul(command[2], NULL, 16);
+                    }
+                    else {
+                        (*target_reg) = stoul(command[2]);
+                    }
 
-                if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
-                    cerr << "** [ptrace] error, set regs" << '\n';
+                    if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
+                        cerr << "** [ptrace] error, set regs" << '\n';
+                    }
                 }
 
                 break;
@@ -684,6 +705,7 @@ int main(int argc, char* argv[])
             current_status = STATUS::NONE;
 
             BreakpointHandler::clear();
+            instructions.clear();
 
             ios state(nullptr);
             state.copyfmt(cout);
