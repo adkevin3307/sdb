@@ -22,23 +22,11 @@ using namespace std;
 static STATUS current_status = STATUS::NONE;
 static pid_t child = -1;
 static int wait_status = -1;
+map<unsigned long, cs_insn> instructions;
 
 void load_program(map<string, string>& args)
 {
     if (args.find("program") == args.end()) return;
-
-    FILE* file = fopen(args["program"].c_str(), "rb");
-
-    if (!file) {
-        cerr << "** [load] error, program not found" << '\n';
-
-        return;
-    }
-
-    Elf64_Ehdr header;
-    fread(&header, 1, sizeof(header), file);
-
-    fclose(file);
 
     if ((child = fork()) < 0) {
         cerr << "** [fork] error" << '\n';
@@ -64,14 +52,73 @@ void load_program(map<string, string>& args)
 
         execvp(args["program"].c_str(), arguments.data());
 
-        exit(EXIT_SUCCESS);
+        exit(EXIT_FAILURE);
     }
     else {
         waitpid(child, &wait_status, 0);
         ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_EXITKILL);
 
+        FILE* file = fopen(args["program"].c_str(), "rb");
+
+        if (!file) {
+            cerr << "** [load] error, program not found" << '\n';
+
+            return;
+        }
+
+        int fd = fileno(file);
+
+        Elf64_Ehdr e_header;
+        fread(&e_header, 1, sizeof(e_header), file);
+
+        vector<Elf64_Shdr> s_headers(e_header.e_shnum);
+        lseek(fd, e_header.e_shoff, SEEK_SET);
+        for (size_t i = 0; i < s_headers.size(); i++) {
+            read(fd, &(s_headers[i]), e_header.e_shentsize);
+        }
+
+        vector<char> sh_str(s_headers[e_header.e_shstrndx].sh_size);
+        lseek(fd, s_headers[e_header.e_shstrndx].sh_offset, SEEK_SET);
+        read(fd, sh_str.data(), s_headers[e_header.e_shstrndx].sh_size);
+
+        vector<char> text_buffer;
+        for (auto s_header : s_headers) {
+            string section_name = sh_str.data() + s_header.sh_name;
+
+            if (section_name == ".text") {
+                text_buffer.resize(s_header.sh_size);
+
+                lseek(fd, s_header.sh_offset, SEEK_SET);
+                read(fd, text_buffer.data(), s_header.sh_size);
+
+                break;
+            }
+        }
+
+        fclose(file);
+
+        csh handle;
+        cs_insn* insn;
+
+        if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
+            cerr << "** [capstone] error, cs_open fail" << '\n';
+        }
+
+        size_t count = cs_disasm(handle, (unsigned char*)text_buffer.data(), text_buffer.size(), e_header.e_entry, 0, &insn);
+
+        if (count > 0) {
+            for (size_t i = 0; i < count; i++) {
+                instructions[insn[i].address] = insn[i];
+            }
+
+            cs_free(insn, count);
+        }
+        else {
+            cerr << "** [capstone] error, disassemble fail" << '\n';
+        }
+
         current_status = STATUS::LOADED;
-        cout << "** program '" << args["program"] << "' loaded. entry point 0x" << hex << header.e_entry << dec << '\n';
+        cout << "** program '" << args["program"] << "' loaded. entry point 0x" << hex << e_header.e_entry << dec << '\n';
     }
 }
 
@@ -80,28 +127,47 @@ void restore_code()
     struct user_regs_struct regs;
     ptrace(PTRACE_GETREGS, child, 0, &regs);
 
+    unsigned long code = ptrace(PTRACE_PEEKTEXT, child, regs.rip, 0);
+
+    if ((code & 0xff) == 0xcc) {
+        code = ((code & 0xffffffffffffff00) | BreakpointHandler::get(BreakpointHandler::find(regs.rip)).code);
+
+        if (ptrace(PTRACE_POKETEXT, child, regs.rip, code) != 0) {
+            cerr << "** [ptrace] error, restore code" << '\n';
+        }
+    }
+}
+
+void check_breakpoint()
+{
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, child, 0, &regs);
+
     unsigned long code = ptrace(PTRACE_PEEKTEXT, child, regs.rip - 1, 0);
 
     if ((code & 0xff) == 0xcc) {
-        code = ((code & 0xffffffffffffff00) | BreakpointHandler::get(BreakpointHandler::find(regs.rip - 1)).code);
+        cout << "** breakpoint @ ";
 
-        if (ptrace(PTRACE_POKETEXT, child, regs.rip - 1, code) != 0) {
-            cerr << "** [ptrace] error, restore code" << '\n';
+        cs_insn instruction = instructions[regs.rip - 1];
+        cout << hex << setw(12) << setfill(' ') << right << (regs.rip - 1) << ":";
+
+        for (auto i = 0; i < 16 && i < instruction.size; i++) {
+            cout << " " << hex << setw(2) << setfill('0') << (unsigned int)instruction.bytes[i];
         }
+
+        cout << '\t' << instruction.mnemonic << '\t' << instruction.op_str << '\n';
 
         regs.rip -= 1;
         regs.rdx = regs.rax;
 
         if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) {
-            cerr << "** [ptrace] error, set regs" << '\n';
+            cerr << "** [ptrace] error, set regs";
         }
     }
 }
 
 int main(int argc, char* argv[])
 {
-    // TODO disasm amount
-
     map<string, string> args = parse(argc, argv);
     load_program(args);
 
@@ -185,6 +251,7 @@ int main(int argc, char* argv[])
                 }
 
                 restore_code();
+
                 ptrace(PTRACE_CONT, child, 0, 0);
 
                 if (origin_status != current_status) {
@@ -192,6 +259,8 @@ int main(int argc, char* argv[])
                 }
 
                 waitpid(child, &wait_status, 0);
+
+                check_breakpoint();
 
                 break;
             }
@@ -227,8 +296,11 @@ int main(int argc, char* argv[])
             }
             case COMMAND_TYPE::CONT:
                 restore_code();
+
                 ptrace(PTRACE_CONT, child, 0, 0);
                 waitpid(child, &wait_status, 0);
+
+                check_breakpoint();
 
                 break;
             case COMMAND_TYPE::DELETE: {
@@ -265,45 +337,31 @@ int main(int argc, char* argv[])
                     break;
                 }
 
+                ios state(nullptr);
+                state.copyfmt(cout);
+
                 unsigned long target = stoul(command[1], NULL, 16);
 
-                csh handle;
-                cs_insn* insn;
+                for (auto instruction : instructions) {
+                    if (instruction.first >= target) {
+                        cout << hex << setw(12) << setfill(' ') << right << instruction.first << ":";
 
-                if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
-                    cerr << "** [capstone] error, cs_open fail" << '\n';
-                }
+                        for (auto i = 0; i < 16; i++) {
+                            cout << " ";
 
-                unsigned long code[7];
-                for (auto i = 0; i < 7; i++) {
-                    code[i] = ptrace(PTRACE_PEEKTEXT, child, target + 8 * i, 0);
-                }
-
-                size_t count = cs_disasm(handle, (unsigned char*)code, 50, target, 0, &insn);
-
-                if (count > 0) {
-                    for (size_t i = 0; i < count && i < 10; i++) {
-                        cout << hex << setw(12) << setfill(' ') << right << insn[i].address << dec << ":";
-
-                        for (size_t j = 0; j < 16; j++) {
-                            cout << ' ';
-
-                            if (j < insn[i].size) {
-                                cout << hex << setw(2) << setfill('0') << (unsigned int)insn[i].bytes[j] << dec;
+                            if (i < instruction.second.size) {
+                                cout << hex << setw(2) << setfill('0') << (unsigned int)instruction.second.bytes[i];
                             }
                             else {
                                 cout << "  ";
                             }
                         }
 
-                        cout << insn[i].mnemonic << '\t' << insn[i].op_str << '\n';
+                        cout << instruction.second.mnemonic << '\t' << instruction.second.op_str << '\n';
                     }
+                }
 
-                    cs_free(insn, count);
-                }
-                else {
-                    cerr << "** [capstone] error, disassemble fail" << '\n';
-                }
+                cout.copyfmt(state);
 
                 break;
             }
@@ -313,6 +371,9 @@ int main(int argc, char* argv[])
 
                     break;
                 }
+
+                ios state(nullptr);
+                state.copyfmt(cout);
 
                 unsigned long target = stoul(command[1], NULL, 16);
 
@@ -340,6 +401,8 @@ int main(int argc, char* argv[])
                     dump_code(target, code, length % 16);
                     target += (length % 16);
                 }
+
+                cout.copyfmt(state);
 
                 break;
             }
@@ -415,6 +478,9 @@ int main(int argc, char* argv[])
                 break;
             }
             case COMMAND_TYPE::GETREGS: {
+                ios state(nullptr);
+                state.copyfmt(cout);
+
                 struct user_regs_struct regs;
                 ptrace(PTRACE_GETREGS, child, 0, &regs);
 
@@ -454,6 +520,8 @@ int main(int argc, char* argv[])
                 cout << '\n';
 
                 cout << dec;
+
+                cout.copyfmt(state);
 
                 break;
             }
@@ -552,8 +620,11 @@ int main(int argc, char* argv[])
             }
             case COMMAND_TYPE::SI:
                 restore_code();
+
                 ptrace(PTRACE_SINGLESTEP, child, 0, 0);
                 waitpid(child, &wait_status, 0);
+
+                check_breakpoint();
 
                 break;
             case COMMAND_TYPE::UNKNOWN:
