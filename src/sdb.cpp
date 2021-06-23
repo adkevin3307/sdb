@@ -526,12 +526,17 @@ int main(int argc, char* argv[])
                 break;
             }
             case COMMAND_TYPE::VMMAP: {
+                ios state(nullptr);
+                state.copyfmt(cout);
+
                 map<range_t, map_entry_t> vmmap;
 
                 load_maps(child, vmmap);
                 for (auto element : vmmap) {
                     cout << element.second << '\n';
                 }
+
+                cout.copyfmt(state);
 
                 break;
             }
