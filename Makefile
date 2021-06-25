@@ -1,4 +1,4 @@
-EXE = hw4
+EXE = sdb
 OBJ_DIR = obj
 TRASH = .cache
 
