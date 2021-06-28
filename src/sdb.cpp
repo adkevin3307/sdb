@@ -199,7 +199,7 @@ int main(int argc, char* argv[])
             if (file.eof()) break;
         }
         else {
-            command = prompt("> ", cin);
+            command = prompt("sdb> ", cin);
         }
 
         switch (CommandHandler::check(command, current_status)) {
